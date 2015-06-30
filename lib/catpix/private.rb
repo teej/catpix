@@ -1,7 +1,7 @@
 # Copyright (c) 2015 Radek Pazdera <me@radek.io>
 # Distributed under the MIT License (see LICENSE.txt)
 
-require "rmagick"
+# require "rmagick"
 require "tco"
 require "terminfo"
 
@@ -36,7 +36,7 @@ module Catpix
   end
 
   def self.load_image(path)
-    Magick::Image::read(path).first
+    # Magick::Image::read(path).first
   end
 
   # Scale the image down based on the limits while keeping the aspect ratio
@@ -60,6 +60,7 @@ module Catpix
     # Resize the image if it's bigger than the limited viewport
     if iw > width or ih > height
       img.change_geometry "#{width}x#{height}" do |cols, rows, img_handle|
+        # TODO: Figure out what this is doing
         img_handle.resize! (cols).to_i, (rows).to_i
       end
     end
