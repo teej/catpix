@@ -1,20 +1,38 @@
 require './lib/gif/color' #TODO: Fix this
 
+def print_bytes(section, byte_str)
+  puts "#{section} => #{bytes_to_string(byte_str)}"
+end
+
+def bytes_to_string(byte_str)
+  byte_str.bytes.map{ |b| b.to_s(16)}.join(' ')
+end
+
 module Catpix
   class Gif
 
-    attr_accessor :width, :height,
+    attr_accessor :canvas_width, :canvas_height,
+      :images,
+
       # Packed Field
       :global_color_table_flag, :color_resolution, :sort_flag, :global_color_table_size,
 
       :bg_color_index, :pixel_aspect_ratio,
 
-      :global_color_table
+      :global_color_table,
+
+      :file_data_buffer
 
     HEADER_LENGTH = 6
     LOGICAL_SCREEN_DESCRIPTOR_LENGTH = 7
 
     EXTENTION_INTRODUCER = '21'
+    # Extension Labels
+    COMMENT_LABEL = 'fe'
+    GRAPHIC_CONTROL_LABEL = 'f9'
+
+    BLOCK_TERMINATOR = '0'
+
     IMAGE_SEPERATOR = '2c'
 
     def self.read(filename)
@@ -26,53 +44,70 @@ module Catpix
       Catpix::Gif.new(file.read)
     end
 
-
-    def print_bytes(section, byte_str)
-      puts "#{section} => #{byte_str.bytes.map{ |b| b.to_s(16)}.join(' ')}"
-    end
-
     def initialize(image_data)
 
-      _image_data = image_data
+      self.images = []
+
+      self.file_data_buffer = image_data
+
+      print_bytes('entire image', image_data)
 
       # print_bytes "Image", image_data
 
-      header = parse_header(_image_data.slice!(0...HEADER_LENGTH))
+      header = parse_header(file_data_buffer.slice!(0...HEADER_LENGTH))
 
-      logical_screen_descriptor = parse_logical_screen_descriptor(_image_data.slice!(0...LOGICAL_SCREEN_DESCRIPTOR_LENGTH))
+      logical_screen_descriptor = parse_logical_screen_descriptor(file_data_buffer.slice!(0...LOGICAL_SCREEN_DESCRIPTOR_LENGTH))
 
       if (self.global_color_table_flag)
         self.global_color_table = []
-        global_color_table_byte_length = global_color_table_size * 3 - 8
+        global_color_table_byte_length = global_color_table_size * 3  #- 8
         # puts "global_color_table_size => #{global_color_table_size}"
         # puts "global_color_table_byte_length => #{global_color_table_byte_length}"
-        parse_global_color_table(_image_data.slice!(0...global_color_table_byte_length))
+        parse_global_color_table(file_data_buffer.slice!(0...global_color_table_byte_length))
       end
 
+      last_block = nil
 
-      while _image_data.size > 0
+      while file_data_buffer.size > 0
 
-        block_header = _image_data.slice!(0)
+        block_header = file_data_buffer.slice!(0)
 
-        print_bytes('block_header', block_header)
+        current_block = bytes_to_string(block_header)
 
-        case block_header.bytes.first.to_s
-          when EXTENTION_INTRODUCER
-          then 
-            extension_label = _image_data.slice!(0).to_s(16)
-            puts "EXTENTION_INTRODUCER #{extension_label}"
+        puts "Start of block [#{current_block}]"
 
-
-          when IMAGE_SEPERATOR
-          then puts 'IMAGE_SEPERATOR'
+        if last_block == IMAGE_SEPERATOR
+          # do stuff
+          puts "Check for image data"
+          parse_image_data()
+          
+        else
+          case current_block
+            when EXTENTION_INTRODUCER
+            then 
+              puts "EXTENTION_INTRODUCER"
+              extension_label = bytes_to_string(file_data_buffer.slice!(0))
+              puts "Label: #{extension_label}"
+              case extension_label
+                when COMMENT_LABEL
+                then
+                  puts "Comment Block found"
+                  parse_comment_block()
+                when GRAPHIC_CONTROL_LABEL
+                  puts "Graphic Control Block found"
+                  parse_graphic_control_block()
+              end
+            when IMAGE_SEPERATOR
+            then
+              puts "Image Block found"
+              parse_image_descriptor(file_data_buffer.slice!(0..8))
+            else
+              break
+          end
         end
 
+        last_block = current_block
 
-
-        
-
-
-        break
       end
 
       # - parse the file format, reject if not gif
@@ -119,8 +154,8 @@ module Catpix
       _bg_color_index     = lsd_data.slice!(0)
       _pixel_aspect_ratio = lsd_data.slice!(0)
 
-      self.width = parse_unsigned(_width)
-      self.height = parse_unsigned(_height)
+      self.canvas_width  = parse_unsigned(_width)
+      self.canvas_height = parse_unsigned(_height)
 
       parse_packed_field(_packed_field)
 
@@ -193,6 +228,61 @@ module Catpix
     def parse_color(color_data)
       # puts color_data.unpack('C')
       Color(*color_data)
+    end
+
+    def parse_comment_block()
+      bytes = 0
+      while bytes_to_string(file_data_buffer.slice!(0)) != BLOCK_TERMINATOR
+        bytes +=1
+      end
+      puts "Found #{bytes} bytes in comment"
+    end
+
+    def parse_graphic_control_block()
+      file_data_buffer.slice!(0..4)
+      last_byte_in_block = bytes_to_string(file_data_buffer.slice!(0))
+      unless last_byte_in_block == BLOCK_TERMINATOR
+        raise "Graphic Control Block incorrectly terminated #{last_byte_in_block}" 
+      end
+    end
+
+
+    def parse_image_descriptor(image_descriptor_bytes)
+      print_bytes("image_descriptor_bytes", image_descriptor_bytes)
+
+      _image = {}
+
+      _image['left']   = parse_unsigned(image_descriptor_bytes.slice!(0..1))
+      _image['top']    = parse_unsigned(image_descriptor_bytes.slice!(0..1))
+      _image['width']  = parse_unsigned(image_descriptor_bytes.slice!(0..1))
+      _image['height'] = parse_unsigned(image_descriptor_bytes.slice!(0..1))
+      _packed_field = image_descriptor_bytes.slice!(0)
+
+      print_bytes('_packed_field', _packed_field)
+
+      self.images << _image
+
+    end
+
+    def parse_image_data()
+
+      while (data_sub_block_header = bytes_to_string(file_data_buffer.slice!(0))) != BLOCK_TERMINATOR
+        
+        block_size = data_sub_block_header.to_i(16)
+        puts "data sub block #{block_size}"
+        data_sub_block = file_data_buffer.slice!(0...block_size)
+        puts "data_sub_block => #{data_sub_block.bytes.join(' ')}"
+        # puts "data_sub_block => #{data_sub_block.bytes.join(' ')}"
+        data_sub_block.bytes.each do |byte|
+          bit_array = parse_byte_to_bit_array(byte.to_s)
+          while bit_array.length > 0
+            color_data = bit_array.shift(4)
+            puts "color_data #{color_data.join.to_i(4)}"
+          end
+        end
+        
+      end
+
     end
 
   end
